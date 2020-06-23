@@ -4,6 +4,8 @@
 * @licence: MIT
 */
 
+#include <filesystem>
+
 #include <OvTools/Utils/PathParser.h>
 
 #include <OvCore/Helpers/GUIDrawer.h>
@@ -13,6 +15,7 @@
 
 #include <OvUI/Widgets/Visual/Separator.h>
 #include <OvUI/Widgets/Layout/Group.h>
+#include <OvUI/Widgets/Layout/GroupCollapsable.h>
 #include <OvUI/Widgets/Buttons/Button.h>
 #include <OvUI/Widgets/Selection/ComboBox.h>
 
@@ -28,17 +31,40 @@ OvEditor::Panels::AssetMetadataEditor::AssetMetadataEditor
 ) :
 	PanelWindow(p_title, p_opened, p_windowSettings)
 {
+    m_targetChanged += [this]() { Refresh(); };
+
 	CreateHeaderButtons();
 	CreateWidget<OvUI::Widgets::Visual::Separator>();
-	m_settings = &CreateWidget<OvUI::Widgets::Layout::Columns<2>>();
-	m_settings->widths[0] = 150;
+    CreateAssetSelector();
+
+    m_settings = &CreateWidget<OvUI::Widgets::Layout::GroupCollapsable>("Settings");
+	m_settingsColumns = &m_settings->CreateWidget<OvUI::Widgets::Layout::Columns<2>>();
+	m_settingsColumns->widths[0] = 150;
+
+    m_info = &CreateWidget<OvUI::Widgets::Layout::GroupCollapsable>("Info");
+    m_infoColumns = &m_info->CreateWidget<OvUI::Widgets::Layout::Columns<2>>();
+    m_infoColumns->widths[0] = 150;
+
+    m_settings->enabled = m_info->enabled = false;
 }
 
 void OvEditor::Panels::AssetMetadataEditor::SetTarget(const std::string& p_path)
 {
 	m_resource = p_path;
-	m_metadata.reset(new OvTools::Filesystem::IniFile(m_resource + ".meta"));
-	CreateSettings();
+
+    if (m_assetSelector)
+    {
+        m_assetSelector->content = m_resource == "" ? m_resource : EDITOR_EXEC(GetResourcePath(m_resource));
+    }
+
+    Refresh();
+}
+
+void OvEditor::Panels::AssetMetadataEditor::Refresh()
+{
+    m_metadata.reset(new OvTools::Filesystem::IniFile(m_resource + ".meta"));
+    CreateSettings();
+    CreateInfo();
 }
 
 void OvEditor::Panels::AssetMetadataEditor::Preview()
@@ -100,11 +126,21 @@ void OvEditor::Panels::AssetMetadataEditor::CreateHeaderButtons()
 	};
 }
 
+void OvEditor::Panels::AssetMetadataEditor::CreateAssetSelector()
+{
+    auto& columns = CreateWidget<OvUI::Widgets::Layout::Columns<2>>();
+    columns.widths[0] = 150;
+    m_assetSelector = &OvCore::Helpers::GUIDrawer::DrawAsset(columns, "Target", m_resource, &m_targetChanged);
+}
+
 void OvEditor::Panels::AssetMetadataEditor::CreateSettings()
 {
-	m_settings->RemoveAllWidgets();
+	m_settingsColumns->RemoveAllWidgets();
 
 	auto fileType = OvTools::Utils::PathParser::GetFileType(m_resource);
+
+    m_settings->enabled = true;
+
 	if (fileType == OvTools::Utils::PathParser::EFileType::MODEL)
 	{
 		CreateModelSettings();
@@ -113,9 +149,38 @@ void OvEditor::Panels::AssetMetadataEditor::CreateSettings()
 	{
 		CreateTextureSettings();
 	}
+    else
+    {
+        m_settings->enabled = false;
+    }
 }
 
-#define MODEL_FLAG_ENTRY(setting) OvCore::Helpers::GUIDrawer::DrawBoolean(*m_settings, setting, [&]() { return m_metadata->Get<bool>(setting); }, [&](bool value) { m_metadata->Set<bool>(setting, value); })
+void OvEditor::Panels::AssetMetadataEditor::CreateInfo()
+{
+    const auto realPath = EDITOR_EXEC(GetRealPath(m_resource));
+
+    m_infoColumns->RemoveAllWidgets();
+
+    if (std::filesystem::exists(realPath))
+    {
+        m_info->enabled = true;
+
+        OvCore::Helpers::GUIDrawer::CreateTitle(*m_infoColumns, "Path");
+        m_infoColumns->CreateWidget<OvUI::Widgets::Texts::Text>(realPath);
+
+        OvCore::Helpers::GUIDrawer::CreateTitle(*m_infoColumns, "Size");
+        m_infoColumns->CreateWidget<OvUI::Widgets::Texts::Text>(std::to_string(std::filesystem::file_size(realPath)) + " Bytes");
+
+        OvCore::Helpers::GUIDrawer::CreateTitle(*m_infoColumns, "Metadata");
+        m_infoColumns->CreateWidget<OvUI::Widgets::Texts::Text>(std::filesystem::exists(realPath) ? "Yes" : "No");
+    }
+    else
+    {
+        m_info->enabled = false;
+    }
+}
+
+#define MODEL_FLAG_ENTRY(setting) OvCore::Helpers::GUIDrawer::DrawBoolean(*m_settingsColumns, setting, [&]() { return m_metadata->Get<bool>(setting); }, [&](bool value) { m_metadata->Set<bool>(setting, value); })
 
 void OvEditor::Panels::AssetMetadataEditor::CreateModelSettings()
 {
@@ -188,23 +253,23 @@ void OvEditor::Panels::AssetMetadataEditor::CreateTextureSettings()
 	filteringModes.emplace(0x2701, "LINEAR_MIPMAP_NEAREST");
 	filteringModes.emplace(0x2702, "NEAREST_MIPMAP_LINEAR");
 
-	OvCore::Helpers::GUIDrawer::CreateTitle(*m_settings, "MIN_FILTER");
-	auto& minFilter = m_settings->CreateWidget<OvUI::Widgets::Selection::ComboBox>(m_metadata->Get<int>("MIN_FILTER"));
+	OvCore::Helpers::GUIDrawer::CreateTitle(*m_settingsColumns, "MIN_FILTER");
+	auto& minFilter = m_settingsColumns->CreateWidget<OvUI::Widgets::Selection::ComboBox>(m_metadata->Get<int>("MIN_FILTER"));
 	minFilter.choices = filteringModes;
 	minFilter.ValueChangedEvent += [this](int p_choice)
 	{
 		m_metadata->Set("MIN_FILTER", p_choice);
 	};
 
-	OvCore::Helpers::GUIDrawer::CreateTitle(*m_settings, "MAG_FILTER");
-	auto& magFilter = m_settings->CreateWidget<OvUI::Widgets::Selection::ComboBox>(m_metadata->Get<int>("MAG_FILTER"));
+	OvCore::Helpers::GUIDrawer::CreateTitle(*m_settingsColumns, "MAG_FILTER");
+	auto& magFilter = m_settingsColumns->CreateWidget<OvUI::Widgets::Selection::ComboBox>(m_metadata->Get<int>("MAG_FILTER"));
 	magFilter.choices = filteringModes;
 	magFilter.ValueChangedEvent += [this](int p_choice)
 	{
 		m_metadata->Set("MAG_FILTER", p_choice);
 	};
 
-	OvCore::Helpers::GUIDrawer::DrawBoolean(*m_settings, "ENABLE_MIPMAPPING", [&]() { return m_metadata->Get<bool>("ENABLE_MIPMAPPING"); }, [&](bool value) { m_metadata->Set<bool>("ENABLE_MIPMAPPING", value); });
+	OvCore::Helpers::GUIDrawer::DrawBoolean(*m_settingsColumns, "ENABLE_MIPMAPPING", [&]() { return m_metadata->Get<bool>("ENABLE_MIPMAPPING"); }, [&](bool value) { m_metadata->Set<bool>("ENABLE_MIPMAPPING", value); });
 }
 
 void OvEditor::Panels::AssetMetadataEditor::Apply()
